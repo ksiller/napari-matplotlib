@@ -1,3 +1,5 @@
+import os
+
 from typing import Any
 
 import napari
@@ -18,7 +20,15 @@ class ScatterBaseWidget(SingleAxesWidget):
 
     # if the number of points is greater than this value,
     # the scatter is plotted as a 2D histogram
-    _threshold_to_switch_to_histogram = 500
+    try:
+        _threshold_to_switch_to_histogram = int(
+            os.environ.get("MAX_SCATTER_POINTS")
+        )
+    except:
+        _threshold_to_switch_to_histogram = 500
+    print(
+        f"_threshold_to_switch_to_histogram={_threshold_to_switch_to_histogram}"
+    )
 
     def draw(self) -> None:
         """
@@ -28,14 +38,18 @@ class ScatterBaseWidget(SingleAxesWidget):
             return
         x, y, x_axis_name, y_axis_name = self._get_data()
 
-        if x.size > self._threshold_to_switch_to_histogram:
-            self.axes.hist2d(
-                x.ravel(),
-                y.ravel(),
-                bins=100,
-            )
+        if type(x) is list and type(y) is list:
+            for i in range(len(y)):
+                self.axes.plot(x[i], y[i], alpha=0.5)
         else:
-            self.axes.scatter(x, y, alpha=0.5)
+            if x.size > self._threshold_to_switch_to_histogram:
+                self.axes.hist2d(
+                    x.ravel(),
+                    y.ravel(),
+                    bins=100,
+                )
+            else:
+                self.axes.scatter(x, y, alpha=0.5)
 
         self.axes.set_xlabel(x_axis_name)
         self.axes.set_ylabel(y_axis_name)
@@ -107,12 +121,12 @@ class FeaturesScatterWidget(ScatterBaseWidget):
         self.layout().addLayout(QVBoxLayout())
 
         self._selectors: dict[str, QComboBox] = {}
-        for dim in ["x", "y"]:
+        for dim in ["x-axis", "y-axis", "Color by"]:
             self._selectors[dim] = QComboBox()
             # Re-draw when combo boxes are updated
             self._selectors[dim].currentTextChanged.connect(self._draw)
 
-            self.layout().addWidget(QLabel(f"{dim}-axis:"))
+            self.layout().addWidget(QLabel(f"{dim}:"))
             self.layout().addWidget(self._selectors[dim])
 
         self._update_layers(None)
@@ -122,14 +136,14 @@ class FeaturesScatterWidget(ScatterBaseWidget):
         """
         Key for the x-axis data.
         """
-        if self._selectors["x"].count() == 0:
+        if self._selectors["x-axis"].count() == 0:
             return None
         else:
-            return self._selectors["x"].currentText()
+            return self._selectors["x-axis"].currentText()
 
     @x_axis_key.setter
     def x_axis_key(self, key: str) -> None:
-        self._selectors["x"].setCurrentText(key)
+        self._selectors["x-axis"].setCurrentText(key)
         self._draw()
 
     @property
@@ -137,14 +151,29 @@ class FeaturesScatterWidget(ScatterBaseWidget):
         """
         Key for the y-axis data.
         """
-        if self._selectors["y"].count() == 0:
+        if self._selectors["y-axis"].count() == 0:
             return None
         else:
-            return self._selectors["y"].currentText()
+            return self._selectors["y-axis"].currentText()
 
     @y_axis_key.setter
     def y_axis_key(self, key: str) -> None:
-        self._selectors["y"].setCurrentText(key)
+        self._selectors["y-axis"].setCurrentText(key)
+        self._draw()
+
+    @property
+    def color_by_key(self) -> str | None:
+        """
+        Key for the color group data.
+        """
+        if self._selectors["Color by"].count() == 0:
+            return None
+        else:
+            return self._selectors["Color by"].currentText()
+
+    @color_by_key.setter
+    def color_by_key(self, key: str) -> None:
+        self._selectors["Color by"].setCurrentText(key)
         self._draw()
 
     def _get_valid_axis_keys(self) -> list[str]:
@@ -177,6 +206,7 @@ class FeaturesScatterWidget(ScatterBaseWidget):
             and len(feature_table) > 0
             and self.x_axis_key in valid_keys
             and self.y_axis_key in valid_keys
+            and self.color_by_key in valid_keys
         )
 
     def draw(self) -> None:
@@ -205,8 +235,17 @@ class FeaturesScatterWidget(ScatterBaseWidget):
         """
         feature_table = self.layers[0].features
 
-        x = feature_table[self.x_axis_key]
-        y = feature_table[self.y_axis_key]
+        if self.color_by_key != "None":
+            x = []
+            y = []
+            labels = []
+            for label, group in feature_table.groupby([self.color_by_key]):
+                labels.append(label)
+                x.append(group[self.x_axis_key])
+                y.append(group[self.y_axis_key])
+        else:
+            x = [feature_table[self.x_axis_key]]
+            y = [feature_table[self.y_axis_key]]
 
         x_axis_name = str(self.x_axis_key)
         y_axis_name = str(self.y_axis_key)
@@ -218,8 +257,11 @@ class FeaturesScatterWidget(ScatterBaseWidget):
         Called when the layer selection changes by ``self.update_layers()``.
         """
         # Clear combobox
-        for dim in ["x", "y"]:
+        for dim in ["x-axis", "y-axis", "Color by"]:
             while self._selectors[dim].count() > 0:
                 self._selectors[dim].removeItem(0)
             # Add keys for newly selected layer
+            if dim in ["Color by"]:
+                # "Color by" is an option, so add "None" as first item to disable
+                self._selectors[dim].addItems(["None"])
             self._selectors[dim].addItems(self._get_valid_axis_keys())
